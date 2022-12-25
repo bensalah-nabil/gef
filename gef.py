@@ -89,8 +89,16 @@ from typing import (Any, ByteString, Callable, Dict, Generator, Iterable,
                     Union)
 from urllib.request import urlopen
 
-GEF_DEFAULT_BRANCH                     = "main"
-GEF_EXTRAS_DEFAULT_BRANCH              = "main"
+GEF_PATH = os.path.abspath(os.path.expanduser(__file__))
+if os.path.islink(GEF_PATH):
+    GEF_PATH = os.readlink(GEF_PATH)
+sys.path.insert(0, os.path.dirname(GEF_PATH))
+
+from gefSrc.util.Color import Color
+from gefSrc.util.helper import *
+from gefSrc.managers import GefManager, GefUiManager
+from gefSrc.config import Config
+
 
 def http_get(url: str) -> Optional[bytes]:
     """Basic HTTP wrapper for GET request. Return the body of the page if HTTP code is OK,
@@ -105,7 +113,7 @@ def http_get(url: str) -> Optional[bytes]:
 def update_gef(argv: List[str]) -> int:
     """Try to update `gef` to the latest version pushed on GitHub main branch.
     Return 0 on success, 1 on failure. """
-    ver = "dev" if "--dev" in argv else GEF_DEFAULT_BRANCH
+    ver = "dev" if "--dev" in argv else Config.GEF_DEFAULT_BRANCH
     latest_gef_data = http_get(f"https://raw.githubusercontent.com/hugsy/gef/{ver}/scripts/gef.sh")
     if not latest_gef_data:
         print("[-] Failed to get remote gef")
@@ -128,23 +136,6 @@ except ImportError:
     sys.exit(0)
 
 
-GDB_MIN_VERSION                        = (8, 0)
-GDB_VERSION                            = tuple(map(int, re.search(r"(\d+)[^\d]+(\d+)", gdb.VERSION).groups()))
-PYTHON_MIN_VERSION                     = (3, 6)
-PYTHON_VERSION                         = sys.version_info[0:2]
-
-DEFAULT_PAGE_ALIGN_SHIFT               = 12
-DEFAULT_PAGE_SIZE                      = 1 << DEFAULT_PAGE_ALIGN_SHIFT
-
-GEF_RC                                 = (pathlib.Path(os.getenv("GEF_RC", "")).absolute()
-                                          if os.getenv("GEF_RC")
-                                          else pathlib.Path().home() / ".gef.rc")
-GEF_TEMP_DIR                           = os.path.join(tempfile.gettempdir(), "gef")
-GEF_MAX_STRING_LENGTH                  = 50
-
-LIBC_HEAP_MAIN_ARENA_DEFAULT_NAME      = "main_arena"
-ANSI_SPLIT_RE                          = r"(\033\[[\d;]*m)"
-
 LEFT_ARROW                             = " ← "
 RIGHT_ARROW                            = " → "
 DOWN_ARROW                             = "↳"
@@ -156,8 +147,6 @@ BP_GLYPH                               = "●"
 GEF_PROMPT                             = "gef➤  "
 GEF_PROMPT_ON                          = f"\001\033[1;32m\002{GEF_PROMPT}\001\033[0m\002"
 GEF_PROMPT_OFF                         = f"\001\033[1;31m\002{GEF_PROMPT}\001\033[0m\002"
-
-PATTERN_LIBC_VERSION                   = re.compile(rb"glibc (\d+)\.(\d+)")
 
 gef : "Gef"
 __registered_commands__ : Set[Type["GenericCommand"]]                                        = set()
@@ -191,6 +180,12 @@ def reset() -> None:
     gef = Gef()
     gef.setup()
 
+    import gefSrc.util.helper as Helper
+    Helper.gef = gef
+
+    import gefSrc.util.Color as ColorModule
+    ColorModule.gef = gef
+
     if arch:
         gef.arch = arch
     return
@@ -217,7 +212,7 @@ def highlight_text(text: str) -> str:
             text = re.sub("(" + match + ")", Color.colorify("\\1", color), text)
         return text
 
-    ansiSplit = re.split(ANSI_SPLIT_RE, text)
+    ansiSplit = re.split(Config.ANSI_SPLIT_RE, text)
 
     for match, color in gef.ui.highlight_table.items():
         for index, val in enumerate(ansiSplit):
@@ -226,7 +221,7 @@ def highlight_text(text: str) -> str:
                 ansiSplit[index] = val.replace(match, Color.colorify(match, color))
                 break
         text = "".join(ansiSplit)
-        ansiSplit = re.split(ANSI_SPLIT_RE, text)
+        ansiSplit = re.split(Config.ANSI_SPLIT_RE, text)
 
     return "".join(ansiSplit)
 
@@ -286,84 +281,6 @@ def bufferize(f: Callable) -> Callable:
         return rv
 
     return wrapper
-
-
-#
-# Helpers
-#
-
-def p8(x: int, s: bool = False, e: Optional["Endianness"] = None) -> bytes:
-    """Pack one byte respecting the current architecture endianness."""
-    endian = e or gef.arch.endianness
-    return struct.pack(f"{endian}B", x) if not s else struct.pack(f"{endian:s}b", x)
-
-
-def p16(x: int, s: bool = False, e: Optional["Endianness"] = None) -> bytes:
-    """Pack one word respecting the current architecture endianness."""
-    endian = e or gef.arch.endianness
-    return struct.pack(f"{endian}H", x) if not s else struct.pack(f"{endian:s}h", x)
-
-
-def p32(x: int, s: bool = False, e: Optional["Endianness"] = None) -> bytes:
-    """Pack one dword respecting the current architecture endianness."""
-    endian = e or gef.arch.endianness
-    return struct.pack(f"{endian}I", x) if not s else struct.pack(f"{endian:s}i", x)
-
-
-def p64(x: int, s: bool = False, e: Optional["Endianness"] = None) -> bytes:
-    """Pack one qword respecting the current architecture endianness."""
-    endian = e or gef.arch.endianness
-    return struct.pack(f"{endian}Q", x) if not s else struct.pack(f"{endian:s}q", x)
-
-
-def u8(x: bytes, s: bool = False, e: Optional["Endianness"] = None) -> int:
-    """Unpack one byte respecting the current architecture endianness."""
-    endian = e or gef.arch.endianness
-    return struct.unpack(f"{endian}B", x)[0] if not s else struct.unpack(f"{endian:s}b", x)[0]
-
-
-def u16(x: bytes, s: bool = False, e: Optional["Endianness"] = None) -> int:
-    """Unpack one word respecting the current architecture endianness."""
-    endian = e or gef.arch.endianness
-    return struct.unpack(f"{endian}H", x)[0] if not s else struct.unpack(f"{endian:s}h", x)[0]
-
-
-def u32(x: bytes, s: bool = False, e: Optional["Endianness"] = None) -> int:
-    """Unpack one dword respecting the current architecture endianness."""
-    endian = e or gef.arch.endianness
-    return struct.unpack(f"{endian}I", x)[0] if not s else struct.unpack(f"{endian:s}i", x)[0]
-
-
-def u64(x: bytes, s: bool = False, e: Optional["Endianness"] = None) -> int:
-    """Unpack one qword respecting the current architecture endianness."""
-    endian = e or gef.arch.endianness
-    return struct.unpack(f"{endian}Q", x)[0] if not s else struct.unpack(f"{endian:s}q", x)[0]
-
-
-def is_ascii_string(address: int) -> bool:
-    """Helper function to determine if the buffer pointed by `address` is an ASCII string (in GDB)"""
-    try:
-        return gef.memory.read_ascii_string(address) is not None
-    except Exception:
-        return False
-
-
-def is_alive() -> bool:
-    """Check if GDB is running."""
-    try:
-        return gdb.selected_inferior().pid > 0
-    except Exception:
-        return False
-
-
-def calling_function() -> Optional[str]:
-    """Return the name of the calling function"""
-    try:
-        stack_info = traceback.extract_stack()[-3]
-        return stack_info.name
-    except:
-        return None
-
 
 #
 # Decorators
@@ -505,67 +422,6 @@ def parse_arguments(required_arguments: Dict[Union[str, Tuple[str, str]], Any],
             return f(*args, **kwargs)
         return wrapper
     return decorator
-
-
-class Color:
-    """Used to colorify terminal output."""
-    colors = {
-        "normal"         : "\033[0m",
-        "gray"           : "\033[1;38;5;240m",
-        "light_gray"     : "\033[0;37m",
-        "red"            : "\033[31m",
-        "green"          : "\033[32m",
-        "yellow"         : "\033[33m",
-        "blue"           : "\033[34m",
-        "pink"           : "\033[35m",
-        "cyan"           : "\033[36m",
-        "bold"           : "\033[1m",
-        "underline"      : "\033[4m",
-        "underline_off"  : "\033[24m",
-        "highlight"      : "\033[3m",
-        "highlight_off"  : "\033[23m",
-        "blink"          : "\033[5m",
-        "blink_off"      : "\033[25m",
-    }
-
-    @staticmethod
-    def redify(msg: str) -> str:        return Color.colorify(msg, "red")
-    @staticmethod
-    def greenify(msg: str) -> str:      return Color.colorify(msg, "green")
-    @staticmethod
-    def blueify(msg: str) -> str:       return Color.colorify(msg, "blue")
-    @staticmethod
-    def yellowify(msg: str) -> str:     return Color.colorify(msg, "yellow")
-    @staticmethod
-    def grayify(msg: str) -> str:       return Color.colorify(msg, "gray")
-    @staticmethod
-    def light_grayify(msg: str) -> str: return Color.colorify(msg, "light_gray")
-    @staticmethod
-    def pinkify(msg: str) -> str:       return Color.colorify(msg, "pink")
-    @staticmethod
-    def cyanify(msg: str) -> str:       return Color.colorify(msg, "cyan")
-    @staticmethod
-    def boldify(msg: str) -> str:       return Color.colorify(msg, "bold")
-    @staticmethod
-    def underlinify(msg: str) -> str:   return Color.colorify(msg, "underline")
-    @staticmethod
-    def highlightify(msg: str) -> str:  return Color.colorify(msg, "highlight")
-    @staticmethod
-    def blinkify(msg: str) -> str:      return Color.colorify(msg, "blink")
-
-    @staticmethod
-    def colorify(text: str, attrs: str) -> str:
-        """Color text according to the given attributes."""
-        if gef.config["gef.disable_color"] is True: return text
-
-        colors = Color.colors
-        msg = [colors[attr] for attr in attrs.split() if attr in colors]
-        msg.append(str(text))
-        if colors["highlight"] in msg:   msg.append(colors["highlight_off"])
-        if colors["underline"] in msg:   msg.append(colors["underline_off"])
-        if colors["blink"] in msg:       msg.append(colors["blink_off"])
-        msg.append(colors["normal"])
-        return "".join(msg)
 
 
 class Address:
@@ -930,46 +786,6 @@ class Elf(FileFormat):
             self.__checksec["Full RelRO"] = self.__checksec["Partial RelRO"] and __check_security_property("-d", abspath, r"BIND_NOW") is True
         return self.__checksec
 
-    @classproperty
-    @deprecated("use `Elf.Abi.X86_64`")
-    def X86_64(cls) -> int: return Elf.Abi.X86_64.value # pylint: disable=no-self-argument
-
-    @classproperty
-    @deprecated("use `Elf.Abi.X86_32`")
-    def X86_32(cls) -> int : return Elf.Abi.X86_32.value # pylint: disable=no-self-argument
-
-    @classproperty
-    @deprecated("use `Elf.Abi.ARM`")
-    def ARM(cls) -> int : return Elf.Abi.ARM.value # pylint: disable=no-self-argument
-
-    @classproperty
-    @deprecated("use `Elf.Abi.MIPS`")
-    def MIPS(cls) -> int : return Elf.Abi.MIPS.value # pylint: disable=no-self-argument
-
-    @classproperty
-    @deprecated("use `Elf.Abi.POWERPC`")
-    def POWERPC(cls) -> int : return Elf.Abi.POWERPC.value # pylint: disable=no-self-argument
-
-    @classproperty
-    @deprecated("use `Elf.Abi.POWERPC64`")
-    def POWERPC64(cls) -> int : return Elf.Abi.POWERPC64.value # pylint: disable=no-self-argument
-
-    @classproperty
-    @deprecated("use `Elf.Abi.SPARC`")
-    def SPARC(cls) -> int : return Elf.Abi.SPARC.value # pylint: disable=no-self-argument
-
-    @classproperty
-    @deprecated("use `Elf.Abi.SPARC64`")
-    def SPARC64(cls) -> int : return Elf.Abi.SPARC64.value # pylint: disable=no-self-argument
-
-    @classproperty
-    @deprecated("use `Elf.Abi.AARCH64`")
-    def AARCH64(cls) -> int : return Elf.Abi.AARCH64.value  # pylint: disable=no-self-argument
-
-    @classproperty
-    @deprecated("use `Elf.Abi.RISCV`")
-    def RISCV(cls) -> int : return Elf.Abi.RISCV.value # pylint: disable=no-self-argument
-
 
 class Phdr:
     class Type(enum.IntEnum):
@@ -1200,7 +1016,7 @@ def search_for_main_arena() -> int:
     """A helper function to find the libc `main_arena` address, either from symbol or from its offset
     from `__malloc_hook`."""
     try:
-        addr = parse_address(f"&{LIBC_HEAP_MAIN_ARENA_DEFAULT_NAME}")
+        addr = parse_address(f"&{Config.LIBC_HEAP_MAIN_ARENA_DEFAULT_NAME}")
 
     except gdb.error:
         malloc_hook_addr = parse_address("(void *)&__malloc_hook")
@@ -1709,7 +1525,7 @@ def get_libc_version() -> Tuple[int, ...]:
                     data = f.read()
             except OSError:
                 continue
-            match = re.search(PATTERN_LIBC_VERSION, data)
+            match = re.search(Config.PATTERN_LIBC_VERSION, data)
             if match:
                 return tuple(int(_) for _ in match.groups())
     return 0, 0
@@ -2124,11 +1940,6 @@ def gef_execute_gdb_script(commands: str) -> None:
     return
 
 
-@deprecated("Use Elf(fname).checksec()")
-def checksec(filename: str) -> Dict[str, bool]:
-    return Elf(filename).checksec
-
-
 @lru_cache()
 def get_arch() -> str:
     """Return the binary's architecture."""
@@ -2157,24 +1968,8 @@ def get_arch() -> str:
     raise RuntimeError(f"Unknown architecture: {arch_str}")
 
 
-@deprecated("Use `gef.binary.entry_point` instead")
-def get_entry_point() -> Optional[int]:
-    """Return the binary entry point."""
-    return gef.binary.entry_point if gef.binary else None
-
-
 def is_pie(fpath: str) -> bool:
     return Elf(fpath).checksec["PIE"]
-
-
-@deprecated("Prefer `gef.arch.endianness == Endianness.BIG_ENDIAN`")
-def is_big_endian() -> bool:
-    return gef.arch.endianness == Endianness.BIG_ENDIAN
-
-
-@deprecated("gef.arch.endianness == Endianness.LITTLE_ENDIAN")
-def is_little_endian() -> bool:
-    return gef.arch.endianness == Endianness.LITTLE_ENDIAN
 
 
 def flags_to_human(reg_value: int, value_table: Dict[int, str]) -> str:
@@ -2200,10 +1995,6 @@ def get_zone_base_address(name: str) -> Optional[int]:
 #
 # Architecture classes
 #
-@deprecated("Using the decorator `register_architecture` is unecessary")
-def register_architecture(cls: Type["Architecture"]) -> Type["Architecture"]:
-    return cls
-
 class ArchitectureBase:
     """Class decorator for declaring an architecture to GEF."""
     aliases: Union[Tuple[()], Tuple[Union[str, Elf.Abi], ...]] = ()
@@ -3343,11 +3134,6 @@ def get_path_from_info_proc() -> Optional[str]:
     return None
 
 
-@deprecated("Use `gef.session.os`")
-def get_os() -> str:
-    return gef.session.os
-
-
 @lru_cache()
 def is_qemu() -> bool:
     if not is_remote_debug():
@@ -3664,26 +3450,6 @@ def cached_lookup_type(_type: str) -> Optional[gdb.Type]:
         return None
 
 
-@deprecated("Use `gef.arch.ptrsize` instead")
-def get_memory_alignment(in_bits: bool = False) -> int:
-    """Try to determine the size of a pointer on this system.
-    First, try to parse it out of the ELF header.
-    Next, use the size of `size_t`.
-    Finally, try the size of $pc.
-    If `in_bits` is set to True, the result is returned in bits, otherwise in
-    bytes."""
-    res = cached_lookup_type("size_t")
-    if res is not None:
-        return res.sizeof if not in_bits else res.sizeof * 8
-
-    try:
-        return gdb.parse_and_eval("$pc").type.sizeof
-    except:
-        pass
-
-    raise OSError("GEF is running under an unsupported mode")
-
-
 def clear_screen(tty: str = "") -> None:
     """Clear the screen."""
     global gef
@@ -3739,8 +3505,8 @@ def align_address_to_size(address: int, align: int) -> int:
 
 def align_address_to_page(address: int) -> int:
     """Align the address to a page."""
-    a = align_address(address) >> DEFAULT_PAGE_ALIGN_SHIFT
-    return a << DEFAULT_PAGE_ALIGN_SHIFT
+    a = align_address(address) >> Config.DEFAULT_PAGE_ALIGN_SHIFT
+    return a << Config.DEFAULT_PAGE_ALIGN_SHIFT
 
 
 def parse_address(address: str) -> int:
@@ -3847,70 +3613,6 @@ def is_syscall(instruction: Union[Instruction,int]) -> bool:
         insn_str += f" {', '.join(instruction.operands)}"
     return insn_str in gef.arch.syscall_instructions
 
-
-#
-# Deprecated API
-#
-
-@deprecated("Use `gef.session.pie_breakpoints[num]`")
-def gef_get_pie_breakpoint(num: int) -> "PieVirtualBreakpoint":
-    return gef.session.pie_breakpoints[num]
-
-
-@deprecated("Use `str(gef.arch.endianness)` instead")
-def endian_str() -> str:
-    return str(gef.arch.endianness)
-
-
-@deprecated("Use `gef.config[key]`")
-def get_gef_setting(name: str) -> Any:
-    return gef.config[name]
-
-
-@deprecated("Use `gef.config[key] = value`")
-def set_gef_setting(name: str, value: Any) -> None:
-    gef.config[name] = value
-    return
-
-
-@deprecated("Use `gef.session.pagesize`")
-def gef_getpagesize() -> int:
-    return gef.session.pagesize
-
-
-@deprecated("Use `gef.session.canary`")
-def gef_read_canary() -> Optional[Tuple[int, int]]:
-    return gef.session.canary
-
-
-@deprecated("Use `gef.session.pid`")
-def get_pid() -> int:
-    return gef.session.pid
-
-
-@deprecated("Use `gef.session.file.name`")
-def get_filename() -> str:
-    return gef.session.file.name
-
-
-@deprecated("Use `gef.heap.main_arena`")
-def get_glibc_arena() -> Optional[GlibcArena]:
-    return gef.heap.main_arena
-
-
-@deprecated("Use `gef.arch.register(regname)`")
-def get_register(regname) -> Optional[int]:
-    return gef.arch.register(regname)
-
-
-@deprecated("Use `gef.memory.maps`")
-def get_process_maps() -> List[Section]:
-    return gef.memory.maps
-
-
-@deprecated("Use `reset_architecture`")
-def set_arch(arch: Optional[str] = None, _: Optional[str] = None) -> None:
-    return reset_architecture(arch)
 
 #
 # GDB event hooking
@@ -4415,23 +4117,6 @@ def register_external_context_pane(pane_name: str, display_pane_function: Callab
 #
 # Commands
 #
-@deprecated("Use `register()`, and inherit from `GenericCommand` instead")
-def register_external_command(cls: Type["GenericCommand"]) -> Type["GenericCommand"]:
-    """Registering function for new GEF (sub-)command to GDB."""
-    return cls
-
-@deprecated("Use `register()`, and inherit from `GenericCommand` instead")
-def register_command(cls: Type["GenericCommand"]) -> Type["GenericCommand"]:
-    """Decorator for registering new GEF (sub-)command to GDB."""
-    return cls
-
-@deprecated("")
-def register_priority_command(cls: Type["GenericCommand"]) -> Type["GenericCommand"]:
-    """Decorator for registering new command with priority, meaning that it must
-    loaded before the other generic commands."""
-    return cls
-
-
 def register(cls: Union[Type["GenericCommand"], Type["GenericFunction"]]) -> Union[Type["GenericCommand"], Type["GenericFunction"]]:
     global __registered_commands__, __registered_functions__
     if issubclass(cls, GenericCommand):
@@ -4524,24 +4209,12 @@ class GenericCommand(gdb.Command):
         """Return the list of settings for this command."""
         return list(iter(self))
 
-    @deprecated(f"Use `self[setting_name]` instead")
-    def get_setting(self, name: str) -> Any:
-        return self.__getitem__(name)
-
     def __getitem__(self, name: str) -> Any:
         key = self.__get_setting_name(name)
         return gef.config[key]
 
-    @deprecated(f"Use `setting_name in self` instead")
-    def has_setting(self, name: str) -> bool:
-        return self.__contains__(name)
-
     def __contains__(self, name: str) -> bool:
         return self.__get_setting_name(name) in gef.config
-
-    @deprecated(f"Use `self[setting_name] = value` instead")
-    def add_setting(self, name: str, value: Tuple[Any, type, str], description: str = "") -> None:
-        return self.__setitem__(name, (value, type(value), description))
 
     def __setitem__(self, name: str, value: Union[Any, Tuple[Any, str]]) -> None:
         # make sure settings are always associated to the root command (which derives from GenericCommand)
@@ -4557,10 +4230,6 @@ class GenericCommand(gdb.Command):
             elif len(value) == 2:
                 gef.config[key] = GefSetting(value[0], description=value[1])
         return
-
-    @deprecated(f"Use `del self[setting_name]` instead")
-    def del_setting(self, name: str) -> None:
-        return self.__delitem__(name)
 
     def __delitem__(self, name: str) -> None:
         del gef.config[self.__get_setting_name(name)]
@@ -9171,12 +8840,6 @@ class HeapAnalysisCommand(GenericCommand):
 #
 # GDB Function declaration
 #
-@deprecated("")
-def register_function(cls: Type["GenericFunction"]) -> Type["GenericFunction"]:
-    """Decorator for registering a new convenience function to GDB."""
-    return cls
-
-
 class GenericFunction(gdb.Function):
     """This is an abstract class for invoking convenience functions, should not be instantiated."""
 
@@ -9359,7 +9022,7 @@ class GefCommand(gdb.Command):
         gef.config["gef.autosave_breakpoints_file"] = GefSetting("", str, "Automatically save and restore breakpoints")
         gef.config["gef.extra_plugins_dir"] = GefSetting("", str, "Autoload additional GEF commands from external directory", hooks={"on_write": self.load_extra_plugins})
         gef.config["gef.disable_color"] = GefSetting(False, bool, "Disable all colors in GEF")
-        gef.config["gef.tempdir"] = GefSetting(GEF_TEMP_DIR, str, "Directory to use for temporary/cache content")
+        gef.config["gef.tempdir"] = GefSetting(Config.GEF_TEMP_DIR, str, "Directory to use for temporary/cache content")
         gef.config["gef.show_deprecation_warnings"] = GefSetting(True, bool, "Toggle the display of the `deprecated` warnings")
         gef.config["gef.buffer"] = GefSetting(True, bool, "Internally buffer command output until completion")
 
@@ -9731,10 +9394,10 @@ class GefSaveCommand(gdb.Command):
         for alias in gef.session.aliases:
             cfg.set("aliases", alias._alias, alias._command)
 
-        with GEF_RC.open("w") as fd:
+        with Config.GEF_RC.open("w") as fd:
             cfg.write(fd)
 
-        ok(f"Configuration saved to '{GEF_RC}'")
+        ok(f"Configuration saved to '{Config.GEF_RC}'")
         return
 
 
@@ -9751,14 +9414,14 @@ class GefRestoreCommand(gdb.Command):
 
     def invoke(self, args: str, from_tty: bool) -> None:
         self.dont_repeat()
-        if  GEF_RC.is_file():
+        if  Config.GEF_RC.is_file():
             quiet = (args.lower() == "quiet")
             self.reload(quiet)
         return
 
     def reload(self, quiet: bool):
         cfg = configparser.ConfigParser()
-        cfg.read(GEF_RC)
+        cfg.read(Config.GEF_RC)
 
         for section in cfg.sections():
             if section == "aliases":
@@ -9783,7 +9446,7 @@ class GefRestoreCommand(gdb.Command):
                 setting.value = setting.type(new_value)
 
         if not quiet:
-            ok(f"Configuration from '{Color.colorify(str(GEF_RC), 'bold blue')}' restored")
+            ok(f"Configuration from '{Color.colorify(str(Config.GEF_RC), 'bold blue')}' restored")
         return
 
 
@@ -9910,6 +9573,42 @@ class AliasesCommand(GenericCommand):
 
     def do_invoke(self, _: List[str]) -> None:
         self.usage()
+        return
+
+
+@register
+class ClearScreenCommand(GenericCommand):
+    """Clear the screen"""
+
+    _cmdline_ = "clear"
+    _syntax_ = f"{_cmdline_}"
+    _example_ = f"{_cmdline_}"
+
+    def __init__(self) -> None:
+        super().__init__()
+        return
+    
+    def do_invoke(self, _: List[str]) -> None:
+        clear_screen()
+        return
+
+
+@register
+class LibcInfoCommand(GenericCommand):
+    """Command to get libc version & base."""
+
+    _cmdline_ = "libc"
+    _syntax_ = f"{_cmdline_}"
+    _example_ = f"{_cmdline_}"
+
+    def __init__(self) -> None:
+        super().__init__()
+        return
+    
+    def do_invoke(self, _: List[str]) -> None:
+        
+        gef_print(f"Libc Base: {hex(gef.libc.base_address)}")
+        gef_print(f"Libc Version: {'.'.join(map(str,gef.libc.version))}")
         return
 
 
@@ -10055,7 +9754,7 @@ class GefInstallExtraScriptCommand(gdb.Command):
 
     def __init__(self) -> None:
         super().__init__(self._cmdline_, gdb.COMMAND_SUPPORT, gdb.COMPLETE_NONE, False)
-        self.branch = gef.config.get("gef.extras_default_branch", GEF_EXTRAS_DEFAULT_BRANCH)
+        self.branch = gef.config.get("gef.extras_default_branch", Config.GEF_EXTRAS_DEFAULT_BRANCH)
         return
 
     def invoke(self, argv: str, from_tty: bool) -> None:
@@ -10119,20 +9818,6 @@ def __gef_prompt__(current_prompt: Callable[[Callable], str]) -> str:
     return prompt
 
 
-class GefManager(metaclass=abc.ABCMeta):
-    def reset_caches(self) -> None:
-        """Reset the LRU-cached attributes"""
-        for attr in dir(self):
-            try:
-                obj = getattr(self, attr)
-                if not hasattr(obj, "cache_clear"):
-                    continue
-                obj.cache_clear()
-            except: # we're reseting the cache here, we don't care if (or which) exception triggers
-                continue
-        return
-
-
 class GefMemoryManager(GefManager):
     """Class that manages memory access for gef."""
     def __init__(self) -> None:
@@ -10161,11 +9846,11 @@ class GefMemoryManager(GefManager):
 
     def read_cstring(self,
                      address: int,
-                     max_length: int = GEF_MAX_STRING_LENGTH,
+                     max_length: int = Config.GEF_MAX_STRING_LENGTH,
                      encoding: Optional[str] = None) -> str:
         """Return a C-string read from memory."""
         encoding = encoding or "unicode-escape"
-        length = min(address | (DEFAULT_PAGE_SIZE-1), max_length+1)
+        length = min(address | (Config.DEFAULT_PAGE_SIZE-1), max_length+1)
 
         try:
             res_bytes = self.read(address, length)
@@ -10561,7 +10246,7 @@ class GefSessionManager(GefManager):
         """Get the system page size"""
         auxval = self.auxiliary_vector
         if not auxval:
-            return DEFAULT_PAGE_SIZE
+            return Config.DEFAULT_PAGE_SIZE
         self._pagesize = auxval["AT_PAGESZ"]
         return self._pagesize
 
@@ -10798,22 +10483,11 @@ class GefRemoteSessionManager(GefSessionManager):
         return
 
 
-class GefUiManager(GefManager):
-    """Class managing UI settings."""
-    def __init__(self) -> None:
-        self.redirect_fd : Optional[TextIOWrapper] = None
-        self.context_hidden = False
-        self.stream_buffer : Optional[StringIO] = None
-        self.highlight_table: Dict[str, str] = {}
-        self.watches: Dict[int, Tuple[int, str]] = {}
-        self.context_messages: List[Tuple[str, str]] = []
-        return
-
-
 class GefLibcManager(GefManager):
     """Class managing everything libc-related (except heap)."""
     def __init__(self) -> None:
         self._version : Optional[Tuple[int, int]] = None
+        self.__libc_base : Optional[int] = None
         return
 
     def __str__(self) -> str:
@@ -10826,6 +10500,12 @@ class GefLibcManager(GefManager):
         if not self._version:
             self._version = get_libc_version()
         return self._version
+    
+    @property
+    def base_address(self) -> Optional[int]:
+        if not self.__libc_base:
+            self.__libc_base = get_section_base_address("libc")
+        return self.__libc_base
 
 
 class Gef:
@@ -10883,10 +10563,10 @@ if __name__ == "__main__":
         err("If you require GEF for GDB+Python2, use https://github.com/hugsy/gef-legacy.")
         exit(1)
 
-    if GDB_VERSION < GDB_MIN_VERSION or PYTHON_VERSION < PYTHON_MIN_VERSION:
+    if Config.GDB_VERSION < Config.GDB_MIN_VERSION or Config.PYTHON_VERSION < Config.PYTHON_MIN_VERSION:
         err("You're using an old version of GDB. GEF will not work correctly. "
-            f"Consider updating to GDB {'.'.join(map(str, GDB_MIN_VERSION))} or higher "
-            f"(with Python {'.'.join(map(str, PYTHON_MIN_VERSION))} or higher).")
+            f"Consider updating to GDB {'.'.join(map(str, Config.GDB_MIN_VERSION))} or higher "
+            f"(with Python {'.'.join(map(str, Config.PYTHON_MIN_VERSION))} or higher).")
         exit(1)
 
     try:
