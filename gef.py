@@ -97,7 +97,9 @@ sys.path.insert(0, os.path.dirname(GEF_PATH))
 from gefSrc.util.Color import Color
 from gefSrc.util.helper import *
 from gefSrc.managers import GefManager, GefUiManager
-from gefSrc.config import Config
+from gefSrc.config import Config, GefSetting
+from gefSrc.commands.GenericCommand import GenericCommand
+from gefSrc.const import *
 
 
 def http_get(url: str) -> Optional[bytes]:
@@ -136,18 +138,6 @@ except ImportError:
     sys.exit(0)
 
 
-LEFT_ARROW                             = " ← "
-RIGHT_ARROW                            = " → "
-DOWN_ARROW                             = "↳"
-HORIZONTAL_LINE                        = "─"
-VERTICAL_LINE                          = "│"
-CROSS                                  = "✘ "
-TICK                                   = "✓ "
-BP_GLYPH                               = "●"
-GEF_PROMPT                             = "gef➤  "
-GEF_PROMPT_ON                          = f"\001\033[1;32m\002{GEF_PROMPT}\001\033[0m\002"
-GEF_PROMPT_OFF                         = f"\001\033[1;31m\002{GEF_PROMPT}\001\033[0m\002"
-
 gef : "Gef"
 __registered_commands__ : Set[Type["GenericCommand"]]                                        = set()
 __registered_functions__ : Set[Type["GenericFunction"]]                                      = set()
@@ -185,6 +175,9 @@ def reset() -> None:
 
     import gefSrc.util.Color as ColorModule
     ColorModule.gef = gef
+
+    import gefSrc.commands.GenericCommand as CmdModule
+    CmdModule.gef = gef
 
     if arch:
         gef.arch = arch
@@ -236,51 +229,6 @@ def gef_print(*args: str, end="\n", sep=" ", **kwargs: Any) -> None:
     print(*parts, sep=sep, end=end, **kwargs)
     return
 
-
-def bufferize(f: Callable) -> Callable:
-    """Store the content to be printed for a function in memory, and flush it on function exit."""
-
-    @functools.wraps(f)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        global gef
-
-        if gef.ui.stream_buffer:
-            return f(*args, **kwargs)
-
-        gef.ui.stream_buffer = StringIO()
-        try:
-            rv = f(*args, **kwargs)
-        finally:
-            redirect = gef.config["context.redirect"]
-            if redirect.startswith("/dev/pts/"):
-                if not gef.ui.redirect_fd:
-                    # if the FD has never been open, open it
-                    fd = open(redirect, "wt")
-                    gef.ui.redirect_fd = fd
-                elif redirect != gef.ui.redirect_fd.name:
-                    # if the user has changed the redirect setting during runtime, update the state
-                    gef.ui.redirect_fd.close()
-                    fd = open(redirect, "wt")
-                    gef.ui.redirect_fd = fd
-                else:
-                    # otherwise, keep using it
-                    fd = gef.ui.redirect_fd
-            else:
-                fd = sys.stdout
-                gef.ui.redirect_fd = None
-
-            if gef.ui.redirect_fd and fd.closed:
-                # if the tty was closed, revert back to stdout
-                fd = sys.stdout
-                gef.ui.redirect_fd = None
-                gef.config["context.redirect"] = ""
-
-            fd.write(gef.ui.stream_buffer.getvalue())
-            fd.flush()
-            gef.ui.stream_buffer = None
-        return rv
-
-    return wrapper
 
 #
 # Decorators
@@ -4134,118 +4082,6 @@ def register(cls: Union[Type["GenericCommand"], Type["GenericFunction"]]) -> Uni
         return cls
 
     raise TypeError(f"`{cls.__class__}` is an illegal class for `register`")
-
-
-class GenericCommand(gdb.Command):
-    """This is an abstract class for invoking commands, should not be instantiated."""
-
-    _cmdline_: str
-    _syntax_: str
-    _example_: Union[str, List[str]] = ""
-
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        attributes = ("_cmdline_", "_syntax_", )
-        if not all(map(lambda x: hasattr(cls, x), attributes)):
-            raise NotImplementedError
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.pre_load()
-        syntax = Color.yellowify("\nSyntax: ") + self._syntax_
-        example = Color.yellowify("\nExamples: \n\t")
-        if isinstance(self._example_, list):
-            example += "\n\t".join(self._example_)
-        elif isinstance(self._example_, str):
-            example += self._example_
-        self.__doc__ = self.__doc__.replace(" "*4, "") + syntax + example
-        self.repeat = False
-        self.repeat_count = 0
-        self.__last_command = None
-        command_type = kwargs.setdefault("command", gdb.COMMAND_OBSCURE)
-        complete_type = kwargs.setdefault("complete", gdb.COMPLETE_NONE)
-        prefix = kwargs.setdefault("prefix", False)
-        super().__init__(self._cmdline_, command_type, complete_type, prefix)
-        self.post_load()
-        return
-
-    def invoke(self, args: str, from_tty: bool) -> None:
-        try:
-            argv = gdb.string_to_argv(args)
-            self.__set_repeat_count(argv, from_tty)
-            bufferize(self.do_invoke)(argv)
-        except Exception as e:
-            # Note: since we are intercepting cleaning exceptions here, commands preferably should avoid
-            # catching generic Exception, but rather specific ones. This is allows a much cleaner use.
-            if is_debug():
-                show_last_exception()
-            else:
-                err(f"Command '{self._cmdline_}' failed to execute properly, reason: {e}")
-        return
-
-    def usage(self) -> None:
-        err(f"Syntax\n{self._syntax_}")
-        return
-
-    def do_invoke(self, argv: List[str]) -> None:
-        raise NotImplementedError
-
-    def pre_load(self) -> None:
-        return
-
-    def post_load(self) -> None:
-        return
-
-    def __get_setting_name(self, name: str) -> str:
-        clsname = self.__class__._cmdline_.replace(" ", "-")
-        return f"{clsname}.{name}"
-
-    def __iter__(self) -> Generator[str, None, None]:
-        for key in gef.config.keys():
-            if key.startswith(self._cmdline_):
-                yield key.replace(f"{self._cmdline_}.", "", 1)
-
-    @property
-    def settings(self) -> List[str]:
-        """Return the list of settings for this command."""
-        return list(iter(self))
-
-    def __getitem__(self, name: str) -> Any:
-        key = self.__get_setting_name(name)
-        return gef.config[key]
-
-    def __contains__(self, name: str) -> bool:
-        return self.__get_setting_name(name) in gef.config
-
-    def __setitem__(self, name: str, value: Union[Any, Tuple[Any, str]]) -> None:
-        # make sure settings are always associated to the root command (which derives from GenericCommand)
-        if "GenericCommand" not in [x.__name__ for x in self.__class__.__bases__]:
-            return
-        key = self.__get_setting_name(name)
-        if key in gef.config:
-            setting = gef.config.raw_entry(key)
-            setting.value = value
-        else:
-            if len(value) == 1:
-                gef.config[key] = GefSetting(value[0])
-            elif len(value) == 2:
-                gef.config[key] = GefSetting(value[0], description=value[1])
-        return
-
-    def __delitem__(self, name: str) -> None:
-        del gef.config[self.__get_setting_name(name)]
-        return
-
-    def __set_repeat_count(self, argv: List[str], from_tty: bool) -> None:
-        if not from_tty:
-            self.repeat = False
-            self.repeat_count = 0
-            return
-
-        command = gdb.execute("show commands", to_string=True).strip().split("\n")[-1]
-        self.repeat = self.__last_command == command
-        self.repeat_count = self.repeat_count + 1 if self.repeat else 0
-        self.__last_command = command
-        return
 
 
 @register
@@ -10069,34 +9905,6 @@ class GefHeapManager(GefManager):
         malloc_alignment = self.malloc_alignment
         ceil = lambda n: int(-1 * n // 1 * -1)
         return malloc_alignment * ceil((address / malloc_alignment))
-
-
-class GefSetting:
-    """Basic class for storing gef settings as objects"""
-    READ_ACCESS = 0
-    WRITE_ACCESS = 1
-
-    def __init__(self, value: Any, cls: Optional[type] = None, description: Optional[str] = None, hooks: Optional[Dict[str, Callable]] = None)  -> None:
-        self.value = value
-        self.type = cls or type(value)
-        self.description = description or ""
-        self.hooks: Tuple[List[Callable], List[Callable]] = ([], [])
-        if hooks:
-            for access, func in hooks.items():
-                if access == "on_read":
-                    idx = GefSetting.READ_ACCESS
-                elif access == "on_write":
-                    idx = GefSetting.WRITE_ACCESS
-                else:
-                    raise ValueError
-                if not callable(func):
-                    raise ValueError(f"hook is not callable")
-                self.hooks[idx].append(func)
-        return
-
-    def __str__(self) -> str:
-        return f"Setting(type={self.type.__name__}, value='{self.value}', desc='{self.description[:10]}...', "\
-            f"read_hooks={len(self.hooks[GefSetting.READ_ACCESS])}, write_hooks={len(self.hooks[GefSetting.READ_ACCESS])})"
 
 
 class GefSettingsManager(dict):
