@@ -1,4 +1,7 @@
 from .GefManager import GefManager
+from typing import (Optional, Dict, Tuple, List)
+from io import StringIO, TextIOWrapper
+
 
 class GefUiManager(GefManager):
     """Class managing UI settings."""

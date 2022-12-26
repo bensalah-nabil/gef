@@ -1,3 +1,5 @@
+from gefSrc.globals import RunTimeGlobals
+
 class Color:
     """Used to colorify terminal output."""
     colors = {
@@ -48,7 +50,7 @@ class Color:
     def colorify(text: str, attrs: str) -> str:
         """Color text according to the given attributes."""
         global gef
-        if gef.config["gef.disable_color"] is True: return text
+        if RunTimeGlobals.gef.config["RunTimeGlobals.gef.disable_color"] is True: return text
 
         colors = Color.colors
         msg = [colors[attr] for attr in attrs.split() if attr in colors]

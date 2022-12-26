@@ -1,7 +1,12 @@
-from typing import (Union, List, Callable, Any, Generator, Tuple)
 from gefSrc.util.Color import Color
-import gdb
 from gefSrc.config import GefSetting
+from gefSrc.globals import RunTimeGlobals
+from gefSrc.util.helper import is_debug
+from gefSrc.util.display_helper import err
+from typing import (Union, List, Callable, Any, Generator, Tuple)
+from io import StringIO
+import functools
+import gdb, sys
 
 
 class GenericCommand(gdb.Command):
@@ -68,7 +73,7 @@ class GenericCommand(gdb.Command):
         return f"{clsname}.{name}"
 
     def __iter__(self) -> Generator[str, None, None]:
-        for key in gef.config.keys():
+        for key in RunTimeGlobals.gef.config.keys():
             if key.startswith(self._cmdline_):
                 yield key.replace(f"{self._cmdline_}.", "", 1)
 
@@ -79,28 +84,28 @@ class GenericCommand(gdb.Command):
 
     def __getitem__(self, name: str) -> Any:
         key = self.__get_setting_name(name)
-        return gef.config[key]
+        return RunTimeGlobals.gef.config[key]
 
     def __contains__(self, name: str) -> bool:
-        return self.__get_setting_name(name) in gef.config
+        return self.__get_setting_name(name) in RunTimeGlobals.gef.config
 
     def __setitem__(self, name: str, value: Union[Any, Tuple[Any, str]]) -> None:
         # make sure settings are always associated to the root command (which derives from GenericCommand)
         if "GenericCommand" not in [x.__name__ for x in self.__class__.__bases__]:
             return
         key = self.__get_setting_name(name)
-        if key in gef.config:
-            setting = gef.config.raw_entry(key)
+        if key in RunTimeGlobals.gef.config:
+            setting = RunTimeGlobals.gef.config.raw_entry(key)
             setting.value = value
         else:
             if len(value) == 1:
-                gef.config[key] = GefSetting(value[0])
+                RunTimeGlobals.gef.config[key] = GefSetting(value[0])
             elif len(value) == 2:
-                gef.config[key] = GefSetting(value[0], description=value[1])
+                RunTimeGlobals.gef.config[key] = GefSetting(value[0], description=value[1])
         return
 
     def __delitem__(self, name: str) -> None:
-        del gef.config[self.__get_setting_name(name)]
+        del RunTimeGlobals.gef.config[self.__get_setting_name(name)]
         return
 
     def __set_repeat_count(self, argv: List[str], from_tty: bool) -> None:
@@ -124,40 +129,40 @@ def bufferize(f: Callable) -> Callable:
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         global gef
 
-        if gef.ui.stream_buffer:
+        if RunTimeGlobals.gef.ui.stream_buffer:
             return f(*args, **kwargs)
 
-        gef.ui.stream_buffer = StringIO()
+        RunTimeGlobals.gef.ui.stream_buffer = StringIO()
         try:
             rv = f(*args, **kwargs)
         finally:
-            redirect = gef.config["context.redirect"]
+            redirect = RunTimeGlobals.gef.config["context.redirect"]
             if redirect.startswith("/dev/pts/"):
-                if not gef.ui.redirect_fd:
+                if not RunTimeGlobals.gef.ui.redirect_fd:
                     # if the FD has never been open, open it
                     fd = open(redirect, "wt")
-                    gef.ui.redirect_fd = fd
-                elif redirect != gef.ui.redirect_fd.name:
+                    RunTimeGlobals.gef.ui.redirect_fd = fd
+                elif redirect != RunTimeGlobals.gef.ui.redirect_fd.name:
                     # if the user has changed the redirect setting during runtime, update the state
-                    gef.ui.redirect_fd.close()
+                    RunTimeGlobals.gef.ui.redirect_fd.close()
                     fd = open(redirect, "wt")
-                    gef.ui.redirect_fd = fd
+                    RunTimeGlobals.gef.ui.redirect_fd = fd
                 else:
                     # otherwise, keep using it
-                    fd = gef.ui.redirect_fd
+                    fd = RunTimeGlobals.gef.ui.redirect_fd
             else:
                 fd = sys.stdout
-                gef.ui.redirect_fd = None
-
-            if gef.ui.redirect_fd and fd.closed:
+                RunTimeGlobals.gef.ui.redirect_fd = None
+            
+            if RunTimeGlobals.gef.ui.redirect_fd and fd.closed:
                 # if the tty was closed, revert back to stdout
                 fd = sys.stdout
-                gef.ui.redirect_fd = None
-                gef.config["context.redirect"] = ""
+                RunTimeGlobals.gef.ui.redirect_fd = None
+                RunTimeGlobals.gef.config["context.redirect"] = ""
 
-            fd.write(gef.ui.stream_buffer.getvalue())
+            fd.write(RunTimeGlobals.gef.ui.stream_buffer.getvalue())
             fd.flush()
-            gef.ui.stream_buffer = None
+            RunTimeGlobals.gef.ui.stream_buffer = None
         return rv
 
     return wrapper
