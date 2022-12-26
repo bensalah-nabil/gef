@@ -100,6 +100,7 @@ from gefSrc.managers import GefManager, GefUiManager
 from gefSrc.config import Config, GefSetting
 from gefSrc.commands.GenericCommand import GenericCommand
 from gefSrc.const import *
+from gefSrc.globals import GlobalRegistered
 
 
 def http_get(url: str) -> Optional[bytes]:
@@ -139,10 +140,6 @@ except ImportError:
 
 
 gef : "Gef"
-__registered_commands__ : Set[Type["GenericCommand"]]                                        = set()
-__registered_functions__ : Set[Type["GenericFunction"]]                                      = set()
-__registered_architectures__ : Dict[Union["Elf.Abi", str], Type["Architecture"]]              = {}
-__registered_file_formats__ : Set[ Type["FileFormat"] ]                                       = set()
 
 
 def reset_all_caches() -> None:
@@ -527,13 +524,12 @@ class FileFormat:
         raise NotImplemented
 
     def __init_subclass__(cls: Type["FileFormat"], **kwargs):
-        global __registered_file_formats__
         super().__init_subclass__(**kwargs)
         required_attributes = ("name", "entry_point", "is_valid", "checksec",)
         for attr in required_attributes:
             if not hasattr(cls, attr):
                 raise NotImplementedError(f"File format '{cls.__name__}' is invalid: missing attribute '{attr}'")
-        __registered_file_formats__.add(cls)
+        GlobalRegistered.file_formats.add(cls)
         return
 
     @classmethod
@@ -1948,11 +1944,10 @@ class ArchitectureBase:
     aliases: Union[Tuple[()], Tuple[Union[str, Elf.Abi], ...]] = ()
 
     def __init_subclass__(cls: Type["ArchitectureBase"], **kwargs):
-        global __registered_architectures__
         super().__init_subclass__(**kwargs)
         for key in getattr(cls, "aliases"):
             if issubclass(cls, Architecture):
-                __registered_architectures__[key] = cls
+                GlobalRegistered.architectures[key] = cls
         return
 
 
@@ -3250,7 +3245,7 @@ def new_objfile_handler(evt: Optional["gdb.NewObjFileEvent"]) -> None:
             # with the actual root directory of the process.
             path = path.replace("target:", str(gef.session.root), 1)
         target = pathlib.Path(path)
-        FileFormatClasses = list(filter(lambda fmtcls: fmtcls.is_valid(target), __registered_file_formats__))
+        FileFormatClasses = list(filter(lambda fmtcls: fmtcls.is_valid(target), GlobalRegistered.file_formats))
         GuessedFileFormatClass : Type[FileFormat] = FileFormatClasses.pop() if len(FileFormatClasses) else Elf
         binary = GuessedFileFormatClass(target)
         if not gef.binary:
@@ -3364,7 +3359,7 @@ def reset_architecture(arch: Optional[str] = None) -> None:
     ELF target. If this fails, an `OSError` exception will occur.
     """
     global gef
-    arches = __registered_architectures__
+    arches = GlobalRegistered.architectures
 
     # check if the architecture is forced by parameter
     if arch:
@@ -4066,19 +4061,18 @@ def register_external_context_pane(pane_name: str, display_pane_function: Callab
 # Commands
 #
 def register(cls: Union[Type["GenericCommand"], Type["GenericFunction"]]) -> Union[Type["GenericCommand"], Type["GenericFunction"]]:
-    global __registered_commands__, __registered_functions__
     if issubclass(cls, GenericCommand):
         assert( hasattr(cls, "_cmdline_"))
         assert( hasattr(cls, "do_invoke"))
-        assert( all(map(lambda x: x._cmdline_ != cls._cmdline_, __registered_commands__)))
-        __registered_commands__.add(cls)
+        assert( all(map(lambda x: x._cmdline_ != cls._cmdline_, GlobalRegistered.commands)))
+        GlobalRegistered.commands.add(cls)
         return cls
 
     if issubclass(cls, GenericFunction):
         assert( hasattr(cls, "_function_"))
         assert( hasattr(cls, "invoke"))
-        assert( all(map(lambda x: x._function_ != cls._function_, __registered_functions__)))
-        __registered_functions__.add(cls)
+        assert( all(map(lambda x: x._function_ != cls._function_, GlobalRegistered.functions)))
+        GlobalRegistered.functions.add(cls)
         return cls
 
     raise TypeError(f"`{cls.__class__}` is an illegal class for `register`")
@@ -8910,7 +8904,7 @@ class GefCommand(gdb.Command):
         nb_added = -1
         start_time = time.perf_counter()
         try:
-            nb_inital = len(__registered_commands__)
+            nb_inital = len(GlobalRegistered.commands)
             directories: List[str] = gef.config["gef.extra_plugins_dir"].split(";") or []
             for d in directories:
                 d = d.strip()
@@ -8927,10 +8921,10 @@ class GefCommand(gdb.Command):
                         if entry.name == "__init__.py": continue
                         load_plugin(entry)
 
-            nb_added = len(__registered_commands__) - nb_inital
+            nb_added = len(GlobalRegistered.commands) - nb_inital
             if nb_added > 0:
                 self.load()
-                nb_failed = len(__registered_commands__) - len(self.commands)
+                nb_failed = len(GlobalRegistered.commands) - len(self.commands)
                 end_time = time.perf_counter()
                 load_time = end_time - start_time
                 ok(f"{Color.colorify(str(nb_added), 'bold green')} extra commands added from "
@@ -8973,15 +8967,15 @@ class GefCommand(gdb.Command):
     def load(self) -> None:
         """Load all the commands and functions defined by GEF into GDB."""
         current_commands = set( self.commands.keys() )
-        new_commands = set( [x._cmdline_ for x in __registered_commands__] ) - current_commands
+        new_commands = set( [x._cmdline_ for x in GlobalRegistered.commands] ) - current_commands
         current_functions = set( self.functions.keys() )
-        new_functions = set([x._function_ for x in __registered_functions__]) - current_functions
+        new_functions = set([x._function_ for x in GlobalRegistered.functions]) - current_functions
         self.missing.clear()
         self.__load_time_ms = time.time()* 1000
 
         # load all new functions
         for name in sorted(new_functions):
-            for function_cls in __registered_functions__:
+            for function_cls in GlobalRegistered.functions:
                 if function_cls._function_ == name:
                     self.functions[name] = function_cls()
                     break
@@ -8989,7 +8983,7 @@ class GefCommand(gdb.Command):
         # load all new commands
         for name in sorted(new_commands):
             try:
-                for command_cls in __registered_commands__:
+                for command_cls in GlobalRegistered.commands:
                     if command_cls._cmdline_ == name:
                         command_instance = command_cls()
 
