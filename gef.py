@@ -98,6 +98,7 @@ from gefSrc.util.helper import *
 from gefSrc.util.display_helper import *
 from gefSrc.util.register_feature import register
 from gefSrc.util.http_helper import http_get, update_gef
+from gefSrc.util.decorators import only_if_gdb_running, only_if_gdb_target_local
 from gefSrc.managers import GefManager, GefUiManager
 from gefSrc.config import Config, GefSetting
 from gefSrc.commands import GenericCommand
@@ -147,30 +148,6 @@ def reset() -> None:
 #
 # Decorators
 #
-def only_if_gdb_running(f: Callable) -> Callable:
-    """Decorator wrapper to check if GDB is running."""
-
-    @functools.wraps(f)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        if is_alive():
-            return f(*args, **kwargs)
-        else:
-            warn("No debugging session active")
-
-    return wrapper
-
-
-def only_if_gdb_target_local(f: Callable) -> Callable:
-    """Decorator wrapper to check if GDB is running locally (target not remote)."""
-
-    @functools.wraps(f)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        if not is_remote_debug():
-            return f(*args, **kwargs)
-        else:
-            warn("This command cannot work for remote sessions.")
-
-    return wrapper
 
 
 def deprecated(solution: str = "") -> Callable:
@@ -3324,11 +3301,6 @@ def is_in_x86_kernel(address: int) -> bool:
     address = align_address(address)
     memalign = RunTimeGlobals.gef.arch.ptrsize*8 - 1
     return (address >> memalign) == 0xF
-
-
-def is_remote_debug() -> bool:
-    """"Return True is the current debugging session is running through GDB remote session."""
-    return RunTimeGlobals.gef.session.remote_initializing or RunTimeGlobals.gef.session.remote is not None
 
 
 def de_bruijn(alphabet: bytes, n: int) -> Generator[str, None, None]:

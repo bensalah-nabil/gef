@@ -89,3 +89,8 @@ def calling_function() -> Optional[str]:
 def is_debug() -> bool:
     """Check if debug mode is enabled."""
     return RunTimeGlobals.gef.config["RunTimeGlobals.gef.debug"] is True
+
+
+def is_remote_debug() -> bool:
+    """"Return True is the current debugging session is running through GDB remote session."""
+    return RunTimeGlobals.gef.session.remote_initializing or RunTimeGlobals.gef.session.remote is not None
