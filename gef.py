@@ -145,20 +145,6 @@ def reset() -> None:
     return
 
 
-#
-# Decorators
-#
-def only_if_events_supported(event_type: str) -> Callable:
-    """Checks if GDB supports events without crashing."""
-    def wrap(f: Callable) -> Callable:
-        def wrapped_f(*args: Any, **kwargs: Any) -> Any:
-            if getattr(gdb, "events") and getattr(gdb.events, event_type):
-                return f(*args, **kwargs)
-            warn("GDB events cannot be set")
-        return wrapped_f
-    return wrap
-
-
 class classproperty(property):
     """Make the attribute a `classproperty`."""
     def __get__(self, cls, owner):
