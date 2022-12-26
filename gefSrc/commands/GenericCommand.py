@@ -1,6 +1,6 @@
+from gefSrc.globals import RunTimeGlobals
 from gefSrc.util.Color import Color
 from gefSrc.config import GefSetting
-from gefSrc.globals import RunTimeGlobals
 from gefSrc.util.helper import is_debug
 from gefSrc.util.display_helper import err
 from typing import (Union, List, Callable, Any, Generator, Tuple)

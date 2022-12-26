@@ -2,8 +2,11 @@ from gefSrc.globals import RunTimeGlobals
 from gefSrc.util.Color import Color
 from gefSrc.config import Config
 from gefSrc.util.helper import is_debug
+from gefSrc.globals import RunTimeGlobals
 import re
-from typing import (Any)
+from typing import Any
+import gdb
+
 
 
 def highlight_text(text: str) -> str:
@@ -78,4 +81,21 @@ def ok(msg: str) -> None:
 
 def info(msg: str) -> None:
     gef_print(f"{Color.colorify('[+]', 'bold blue')} {msg}")
+    return
+
+
+def clear_screen(tty: str = "") -> None:
+    """Clear the screen."""
+    if not tty:
+        gdb.execute("shell clear -x")
+        return
+
+    # Since the tty can be closed at any time, a PermissionError exception can
+    # occur when `clear_screen` is called. We handle this scenario properly
+    try:
+        with open(tty, "wt") as f:
+            f.write("\x1b[H\x1b[J")
+    except PermissionError:
+        RunTimeGlobals.gef.ui.redirect_fd = None
+        RunTimeGlobals.gef.config["context.redirect"] = ""
     return

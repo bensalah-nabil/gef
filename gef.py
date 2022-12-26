@@ -97,9 +97,11 @@ sys.path.insert(0, os.path.dirname(GEF_PATH))
 from gefSrc.util.Color import Color
 from gefSrc.util.helper import *
 from gefSrc.util.display_helper import *
+from gefSrc.util.register_feature import register
 from gefSrc.managers import GefManager, GefUiManager
 from gefSrc.config import Config, GefSetting
-from gefSrc.commands.GenericCommand import GenericCommand
+from gefSrc.commands import GenericCommand
+from gefSrc.functions.GenericFunction import GenericFunction
 from gefSrc.const import *
 from gefSrc.globals import GlobalRegistered, RunTimeGlobals
 
@@ -3296,24 +3298,6 @@ def cached_lookup_type(_type: str) -> Optional[gdb.Type]:
         return None
 
 
-def clear_screen(tty: str = "") -> None:
-    """Clear the screen."""
-    return
-    if not tty:
-        gdb.execute("shell clear -x")
-        return
-
-    # Since the tty can be closed at any time, a PermissionError exception can
-    # occur when `clear_screen` is called. We handle this scenario properly
-    try:
-        with open(tty, "wt") as f:
-            f.write("\x1b[H\x1b[J")
-    except PermissionError:
-        RunTimeGlobals.gef.ui.redirect_fd = None
-        RunTimeGlobals.gef.config["context.redirect"] = ""
-    return
-
-
 def format_address(addr: int) -> str:
     """Format the address according to its size."""
     memalign_size = RunTimeGlobals.gef.arch.ptrsize
@@ -3962,24 +3946,6 @@ def register_external_context_pane(pane_name: str, display_pane_function: Callab
 #
 # Commands
 #
-def register(cls: Union[Type["GenericCommand"], Type["GenericFunction"]]) -> Union[Type["GenericCommand"], Type["GenericFunction"]]:
-    if issubclass(cls, GenericCommand):
-        assert( hasattr(cls, "_cmdline_"))
-        assert( hasattr(cls, "do_invoke"))
-        assert( all(map(lambda x: x._cmdline_ != cls._cmdline_, GlobalRegistered.commands)))
-        GlobalRegistered.commands.add(cls)
-        return cls
-
-    if issubclass(cls, GenericFunction):
-        assert( hasattr(cls, "_function_"))
-        assert( hasattr(cls, "invoke"))
-        assert( all(map(lambda x: x._function_ != cls._function_, GlobalRegistered.functions)))
-        GlobalRegistered.functions.add(cls)
-        return cls
-
-    raise TypeError(f"`{cls.__class__}` is an illegal class for `register`")
-
-
 @register
 class VersionCommand(GenericCommand):
     """Display GEF version info."""
@@ -8563,32 +8529,6 @@ class HeapAnalysisCommand(GenericCommand):
 #
 # GDB Function declaration
 #
-class GenericFunction(gdb.Function):
-    """This is an abstract class for invoking convenience functions, should not be instantiated."""
-
-    _function_ : str
-    _syntax_: str = ""
-    _example_ : str = ""
-
-    def __init__(self) -> None:
-        super().__init__(self._function_)
-
-    def invoke(self, *args: Any) -> int:
-        if not is_alive():
-            raise gdb.GdbError("No debugging session active")
-        return self.do_invoke(args)
-
-    def arg_to_long(self, args: List, index: int, default: int = 0) -> int:
-        try:
-            addr = args[index]
-            return int(addr) if addr.address is None else int(addr.address)
-        except IndexError:
-            return default
-
-    def do_invoke(self, args: Any) -> int:
-        raise NotImplementedError
-
-
 @register
 class StackOffsetFunction(GenericFunction):
     """Return the current stack base address plus an optional offset."""
@@ -9294,42 +9234,6 @@ class AliasesCommand(GenericCommand):
 
     def do_invoke(self, _: List[str]) -> None:
         self.usage()
-        return
-
-
-@register
-class ClearScreenCommand(GenericCommand):
-    """Clear the screen"""
-
-    _cmdline_ = "clear"
-    _syntax_ = f"{_cmdline_}"
-    _example_ = f"{_cmdline_}"
-
-    def __init__(self) -> None:
-        super().__init__()
-        return
-    
-    def do_invoke(self, _: List[str]) -> None:
-        clear_screen()
-        return
-
-
-@register
-class LibcInfoCommand(GenericCommand):
-    """Command to get libc version & base."""
-
-    _cmdline_ = "libc"
-    _syntax_ = f"{_cmdline_}"
-    _example_ = f"{_cmdline_}"
-
-    def __init__(self) -> None:
-        super().__init__()
-        return
-    
-    def do_invoke(self, _: List[str]) -> None:
-        
-        gef_print(f"Libc Base: {hex(RunTimeGlobals.gef.libc.base_address)}")
-        gef_print(f"Libc Version: {'.'.join(map(str,RunTimeGlobals.gef.libc.version))}")
         return
 
 
